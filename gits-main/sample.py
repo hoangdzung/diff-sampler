@@ -171,10 +171,10 @@ def create_model(dataset_name=None, guidance_type=None, guidance_rate=None, devi
 
 def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **solver_kwargs):
 
-    dist.init()
-    num_batches = ((len(seeds) - 1) // (solver_kwargs['max_batch_size'] * dist.get_world_size()) + 1) * dist.get_world_size()
+    #dist.init()
+    num_batches = ((len(seeds) - 1) // (solver_kwargs['max_batch_size']) + 1)
     all_batches = torch.as_tensor(seeds).tensor_split(num_batches)
-    rank_batches = all_batches[dist.get_rank() :: dist.get_world_size()]
+    rank_batches = all_batches
 
     dataset_name = solver_kwargs['dataset_name']
     if dataset_name in ['ms_coco'] and solver_kwargs['prompt'] is None:
@@ -189,15 +189,15 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
                 sample_captions.append(text)
 
     # Rank 0 goes first
-    if dist.get_rank() != 0:
-        torch.distributed.barrier()
+    #if dist.get_rank() != 0:
+    #    torch.distributed.barrier()
 
     # Load pre-trained diffusion models.
     net, solver_kwargs['model_source'] = create_model(dataset_name, solver_kwargs['guidance_type'], solver_kwargs['guidance_rate'], device)
 
     # Other ranks follow.
-    if dist.get_rank() == 0:
-        torch.distributed.barrier()
+    #if dist.get_rank() == 0:
+    #    torch.distributed.barrier()
 
     # Get the time schedule
     solver_kwargs['sigma_min'] = net.sigma_min
@@ -209,18 +209,18 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
                                             schedule_type=solver_kwargs["schedule_type"], schedule_rho=solver_kwargs["schedule_rho"], \
                                             net=net, dp_list=dp_list)
         if solver_kwargs['dp']:
-            dist.print0('Selected dp_list:', dp_list)
-            dist.print0('Selected time schedule: ', [round(num.item(), 4) for num in t_steps])
+            print('Selected dp_list:', dp_list)
+            print('Selected time schedule: ', [round(num.item(), 4) for num in t_steps])
     else:
         if solver_kwargs['dp']:
-            dist.print0('t_steps is specified, ignored DP')
+            print('t_steps is specified, ignored DP')
         t_steps_list = ast.literal_eval(t_steps)
         t_steps = torch.tensor(t_steps_list, device=device)
         solver_kwargs['num_steps'] = t_steps.shape[0]
         solver_kwargs['sigma_max'], solver_kwargs['sigma_min'] = t_steps_list[0], t_steps_list[-1]
         solver_kwargs['schedule_type'] = solver_kwargs['schedule_rho'] = None
         solver_kwargs['dp'] = False
-        dist.print0('Pre-specified t_steps:', t_steps_list)
+        print('Pre-specified t_steps:', t_steps_list)
     solver_kwargs['t_steps'] = t_steps
 
     # Calculate the exact NFE
@@ -263,7 +263,7 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
         solver_kwargs['coeff_list'] = solver_utils.get_deis_coeff_list(t_steps, solver_kwargs['max_order'], deis_mode=solver_kwargs["deis_mode"])
 
     # Print solver settings.
-    dist.print0("Solver settings:")
+    print("Solver settings:")
     for key, value in solver_kwargs.items():
         if value is None:
             continue
@@ -281,7 +281,7 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
             continue
         elif key in ['dp', 'metric', 'coeff', 'num_warmup', 'num_steps_tea', 'solver_tea'] and solver_kwargs['dp'] is False:
             continue
-        dist.print0(f"\t{key}: {value}")
+        print(f"\t{key}: {value}")
 
     # Loop over batches.
     if outdir is None:
@@ -289,9 +289,9 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
             outdir = os.path.join(f"./samples/grids/{dataset_name}", f"{solver}_nfe{nfe}")
         else:
             outdir = os.path.join(f"./samples/{dataset_name}", f"{solver}_nfe{nfe}")
-    dist.print0(f'Generating {len(seeds)} images to "{outdir}"...')
-    for batch_seeds in tqdm.tqdm(rank_batches, unit='batch', disable=(dist.get_rank() != 0)):
-        torch.distributed.barrier()
+    print(f'Generating {len(seeds)} images to "{outdir}"...')
+    for batch_seeds in tqdm.tqdm(rank_batches, unit='batch'):
+        #torch.distributed.barrier()
         batch_size = len(batch_seeds)
         if batch_size == 0:
             continue
@@ -342,8 +342,8 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
                 PIL.Image.fromarray(image_np, 'RGB').save(image_path)
     
     # Done.
-    torch.distributed.barrier()
-    dist.print0('Done.')
+    # torch.distributed.barrier()
+    print('Done.')
 
 #----------------------------------------------------------------------------
 

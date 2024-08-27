@@ -131,8 +131,8 @@ def get_dp_list(net, device, **solver_kwargs):
                     else:
                         raise NotImplementedError(f"Unknown metric: {metric}")
 
-    torch.distributed.all_reduce(cost_mat)
-    cost_mat /= dist.get_world_size() * num_accumulation_rounds
+    # torch.distributed.all_reduce(cost_mat)
+    cost_mat /= num_accumulation_rounds
     cost_mat = cost_mat.detach().cpu().numpy()
 
     # Description string.
