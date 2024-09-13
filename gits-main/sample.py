@@ -191,14 +191,18 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
         import hpsv2
         sample_captions = hpsv2.benchmark_prompts(dataset_name) 
 
+        seeds = list(range(len(sample_captions)))
+        num_batches = ((len(seeds) - 1) // (solver_kwargs['max_batch_size'] * dist.get_world_size()) + 1) * dist.get_world_size()
+        all_batches = torch.as_tensor(seeds).tensor_split(num_batches)
+        rank_batches = all_batches[dist.get_rank() :: dist.get_world_size()]
 
     # Rank 0 goes first
     if dist.get_rank() != 0:
         torch.distributed.barrier()
 
     # Load pre-trained diffusion models.
-    net, solver_kwargs['model_source'] = create_model(dataset_name, solver_kwargs['guidance_type'], solver_kwargs['guidance_rate'], device)
-
+    net, solver_kwargs['model_source'] = create_model(dataset_name if dataset_name not in ['anime', 'concept-art', 'paintings', 'photo'] else "ms_coco", solver_kwargs['guidance_type'], solver_kwargs['guidance_rate'], device)
+    breakpoint()
     # Other ranks follow.
     if dist.get_rank() == 0:
         torch.distributed.barrier()
@@ -241,7 +245,7 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
             nfe = nfe if solver_kwargs['dp'] else nfe - 1
     if solver_kwargs['denoise_to_zero']:                    # need another 1 NFE, not recommend
         nfe += 1
-    if dataset_name in ['ms_coco'] and solver_kwargs['guidance_rate'] not in [0., 1.]:
+    if dataset_name in ['ms_coco', 'anime', 'concept-art', 'paintings', 'photo'] and solver_kwargs['guidance_rate'] not in [0., 1.]:
         # requires doubled NFE due to the classifier-free-guidance
         nfe = 2 * nfe
     solver_kwargs['nfe'] = nfe
@@ -293,6 +297,7 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
             outdir = os.path.join(f"./samples/grids/{dataset_name}", f"{solver}_nfe{nfe}")
         else:
             outdir = os.path.join(f"./samples/{dataset_name}", f"{solver}_nfe{nfe}")
+    os.makedirs(outdir, exist_ok=True)
     dist.print0(f'Generating {len(seeds)} images to "{outdir}"...')
     for batch_seeds in tqdm.tqdm(rank_batches, unit='batch', disable=(dist.get_rank() != 0)):
         torch.distributed.barrier()
@@ -340,9 +345,12 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
         else:
             images_np = (images * 127.5 + 128).clip(0, 255).to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
             for seed, image_np in zip(batch_seeds, images_np):
-                image_dir = os.path.join(outdir, f'{seed-seed%1000:06d}') if subdirs else outdir
-                os.makedirs(image_dir, exist_ok=True)
-                image_path = os.path.join(image_dir, f'{seed:06d}.png')
+                if dataset_name in ['anime', 'concept-art', 'paintings', 'photo']:
+                    image_path = os.path.join(outdir, f'{seed:05d}.jpg')
+                else:
+                    image_dir = os.path.join(outdir, f'{seed-seed%1000:06d}') if subdirs else outdir
+                    os.makedirs(image_dir, exist_ok=True)
+                    image_path = os.path.join(image_dir, f'{seed:06d}.png')
                 PIL.Image.fromarray(image_np, 'RGB').save(image_path)
     
     # Done.
