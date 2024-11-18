@@ -60,7 +60,7 @@ def load_ldm_model(config, ckpt, verbose=False):
     from models.ldm.util import instantiate_from_config
     pl_sd = torch.load(ckpt, map_location="cpu")
     if "global_step" in pl_sd:
-        dist.print0(f"Global Step: {pl_sd['global_step']}")
+        print(f"Global Step: {pl_sd['global_step']}")
     sd = pl_sd["state_dict"]
     model = instantiate_from_config(config.model)
     m, u = model.load_state_dict(sd, strict=False)
@@ -76,10 +76,10 @@ def load_ldm_model(config, ckpt, verbose=False):
 
 def create_model(dataset_name=None, guidance_type=None, guidance_rate=None, device=None):
     model_path, classifier_path = check_file_by_key(dataset_name)
-    dist.print0(f'Loading the pre-trained diffusion model from "{model_path}"...')
+    print(f'Loading the pre-trained diffusion model from "{model_path}"...')
 
     if dataset_name in ['cifar10', 'ffhq', 'afhqv2', 'imagenet64']:         # models from EDM
-        with dnnlib.util.open_url(model_path, verbose=(dist.get_rank() == 0)) as f:
+        with dnnlib.util.open_url(model_path, verbose=(0 == 0)) as f:
             net = pickle.load(f)['ema'].to(device)
         net.sigma_min = 0.002
         net.sigma_max = 80.0
@@ -91,6 +91,7 @@ def create_model(dataset_name=None, guidance_type=None, guidance_rate=None, devi
         net = CMPrecond(net).to(device)
         model_source = 'cm'
     else:
+        breakpoint()
         if guidance_type == 'cg':            # clssifier guidance           # models from ADM
             assert classifier_path is not None
             from models.guided_diffusion.cg_model_loader import load_cg_model
@@ -105,6 +106,8 @@ def create_model(dataset_name=None, guidance_type=None, guidance_rate=None, devi
                 config = OmegaConf.load('./models/ldm/configs/latent-diffusion/lsun_bedrooms-ldm-vq-4.yaml')
                 net = load_ldm_model(config, model_path)
                 net = CFGPrecond(net, img_resolution=64, img_channels=3, guidance_rate=1., guidance_type='uncond', label_dim=0).to(device)
+                print(net)
+                breakpoint()
             elif dataset_name in ['ffhq_ldm']:
                 config = OmegaConf.load('./models/ldm/configs/latent-diffusion/ffhq-ldm-vq-4.yaml')
                 net = load_ldm_model(config, model_path)
@@ -171,10 +174,10 @@ def create_model(dataset_name=None, guidance_type=None, guidance_rate=None, devi
 
 def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **solver_kwargs):
 
-    dist.init()
-    num_batches = ((len(seeds) - 1) // (solver_kwargs['max_batch_size'] * dist.get_world_size()) + 1) * dist.get_world_size()
+    # dist.init()
+    num_batches = ((len(seeds) - 1) // (solver_kwargs['max_batch_size'] *1) + 1) *1
     all_batches = torch.as_tensor(seeds).tensor_split(num_batches)
-    rank_batches = all_batches[dist.get_rank() :: dist.get_world_size()]
+    rank_batches = all_batches[0 ::1]
 
     dataset_name = solver_kwargs['dataset_name']
     if dataset_name in ['ms_coco'] and solver_kwargs['prompt'] is None:
@@ -192,20 +195,20 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
         sample_captions = hpsv2.benchmark_prompts(dataset_name) 
 
         seeds = list(range(len(sample_captions)))
-        num_batches = ((len(seeds) - 1) // (solver_kwargs['max_batch_size'] * dist.get_world_size()) + 1) * dist.get_world_size()
+        num_batches = ((len(seeds) - 1) // (solver_kwargs['max_batch_size'] *1) + 1) *1
         all_batches = torch.as_tensor(seeds).tensor_split(num_batches)
-        rank_batches = all_batches[dist.get_rank() :: dist.get_world_size()]
+        rank_batches = all_batches[0 ::1]
 
     # Rank 0 goes first
-    if dist.get_rank() != 0:
-        torch.distributed.barrier()
+    # if 0 != 0:
+    #     torch.distributed.barrier()
 
     # Load pre-trained diffusion models.
     net, solver_kwargs['model_source'] = create_model(dataset_name if dataset_name not in ['anime', 'concept-art', 'paintings', 'photo'] else "ms_coco", solver_kwargs['guidance_type'], solver_kwargs['guidance_rate'], device)
-    breakpoint()
+
     # Other ranks follow.
-    if dist.get_rank() == 0:
-        torch.distributed.barrier()
+    # if 0 == 0:
+    #     torch.distributed.barrier()
 
     # Get the time schedule
     solver_kwargs['sigma_min'] = net.sigma_min
@@ -217,20 +220,19 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
                                             schedule_type=solver_kwargs["schedule_type"], schedule_rho=solver_kwargs["schedule_rho"], \
                                             net=net, dp_list=dp_list)
         if solver_kwargs['dp']:
-            dist.print0('Selected dp_list:', dp_list)
-            dist.print0('Selected time schedule: ', [round(num.item(), 4) for num in t_steps])
+            print('Selected dp_list:', dp_list)
+            print('Selected time schedule: ', [round(num.item(), 4) for num in t_steps])
     else:
         if solver_kwargs['dp']:
-            dist.print0('t_steps is specified, ignored DP')
+            print('t_steps is specified, ignored DP')
         t_steps_list = ast.literal_eval(t_steps)
         t_steps = torch.tensor(t_steps_list, device=device)
         solver_kwargs['num_steps'] = t_steps.shape[0]
         solver_kwargs['sigma_max'], solver_kwargs['sigma_min'] = t_steps_list[0], t_steps_list[-1]
         solver_kwargs['schedule_type'] = solver_kwargs['schedule_rho'] = None
         solver_kwargs['dp'] = False
-        dist.print0('Pre-specified t_steps:', t_steps_list)
+        print('Pre-specified t_steps:', t_steps_list)
     solver_kwargs['t_steps'] = t_steps
-
     # Calculate the exact NFE
     solver = solver_kwargs['solver']
     if solver in ['dpm', 'heun']:                           # 1 step = 2 NFE
@@ -271,7 +273,7 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
         solver_kwargs['coeff_list'] = solver_utils.get_deis_coeff_list(t_steps, solver_kwargs['max_order'], deis_mode=solver_kwargs["deis_mode"])
 
     # Print solver settings.
-    dist.print0("Solver settings:")
+    print("Solver settings:")
     for key, value in solver_kwargs.items():
         if value is None:
             continue
@@ -289,7 +291,7 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
             continue
         elif key in ['dp', 'metric', 'coeff', 'num_warmup', 'num_steps_tea', 'solver_tea'] and solver_kwargs['dp'] is False:
             continue
-        dist.print0(f"\t{key}: {value}")
+        print(f"\t{key}: {value}")
 
     # Loop over batches.
     if outdir is None:
@@ -298,9 +300,10 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
         else:
             outdir = os.path.join(f"./samples/{dataset_name}", f"{solver}_nfe{nfe}")
     os.makedirs(outdir, exist_ok=True)
-    dist.print0(f'Generating {len(seeds)} images to "{outdir}"...')
-    for batch_seeds in tqdm.tqdm(rank_batches, unit='batch', disable=(dist.get_rank() != 0)):
-        torch.distributed.barrier()
+    print(f'Generating {len(seeds)} images to "{outdir}"...')
+    exit()
+    for batch_seeds in tqdm.tqdm(rank_batches, unit='batch', disable=(0 != 0)):
+        # torch.distributed.barrier()
         batch_size = len(batch_seeds)
         if batch_size == 0:
             continue
@@ -354,8 +357,8 @@ def main(seeds, grid, outdir, subdirs, t_steps, device=torch.device('cuda'), **s
                 PIL.Image.fromarray(image_np, 'RGB').save(image_path)
     
     # Done.
-    torch.distributed.barrier()
-    dist.print0('Done.')
+    # torch.distributed.barrier()
+    print('Done.')
 
 #----------------------------------------------------------------------------
 
